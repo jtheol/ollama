@@ -153,6 +153,27 @@ type CompletionChunk struct {
 	Usage             *Usage                `json:"usage,omitempty"`
 }
 
+type ResponsesRequest struct {
+	Input              string                   `json:"input"`
+	Model              string                   `json:"model"`
+	Include            []string                 `json:"include,omitempty"`
+	Instructions       string                   `json:"instructions,omitempty"`
+	MaxOutputTokens    int                      `json:"max_output_tokens,omitempty"`
+	Metadata           map[string]string        `json:"metadata,omitempty"`
+	ParallelToolCalls  bool                     `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
+	Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
+	Store              bool                     `json:"store,omitempty"`
+	Stream             bool                     `json:"stream,omitempty"`
+	Temperature        float64                  `json:"temperature,omitempty"`
+	Text               map[string]interface{}   `json:"text,omitempty"`
+	ToolChoice         interface{}              `json:"tool_choice,omitempty"`
+	Tools              []map[string]interface{} `json:"tools,omitempty"`
+	TopP               float64                  `json:"top_p,omitempty"`
+	Truncation         string                   `json:"truncation,omitempty"`
+	User               string                   `json:"user,omitempty"`
+}
+
 type ToolCall struct {
 	ID       string `json:"id"`
 	Index    int    `json:"index"`
@@ -582,6 +603,17 @@ func fromCompleteRequest(r CompletionRequest) (api.GenerateRequest, error) {
 	}, nil
 }
 
+func fromResponsesRequest(r ResponsesRequest) (interface{}, error) {
+
+	genReq := map[string]interface{}{
+		"prompt": r.Input,
+		"model":  r.Model,
+		"stream": r.Stream,
+	}
+
+	return genReq, nil
+}
+
 type BaseWriter struct {
 	gin.ResponseWriter
 }
@@ -598,6 +630,12 @@ type CompleteWriter struct {
 	stream        bool
 	streamOptions *StreamOptions
 	id            string
+	BaseWriter
+}
+
+type ResponsesWriter struct {
+	stream bool
+	id     string
 	BaseWriter
 }
 
@@ -903,6 +941,44 @@ func CompletionsMiddleware() gin.HandlerFunc {
 			streamOptions: req.StreamOptions,
 		}
 
+		c.Writer = w
+		c.Next()
+	}
+}
+
+func ResponsesMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req ResponsesRequest
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, NewError(http.StatusBadRequest, err.Error()))
+			return
+		}
+
+		if req.Model == "" {
+			c.AbortWithStatusJSON(http.StatusBadRequest, NewError(http.StatusBadRequest, "model is required"))
+			return
+		}
+
+		var b bytes.Buffer
+		genReq, err := fromResponsesRequest(req)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, NewError(http.StatusBadRequest, err.Error()))
+			return
+		}
+
+		if err := json.NewEncoder(&b).Encode(genReq); err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, NewError(http.StatusInternalServerError, err.Error()))
+			return
+		}
+
+		c.Request.Body = io.NopCloser(&b)
+
+		w := &ResponsesWriter{
+			BaseWriter: BaseWriter{ResponseWriter: c.Writer},
+			stream:     req.Stream,
+			id:         fmt.Sprintf("resp-%d", rand.Intn(999)),
+		}
 		c.Writer = w
 		c.Next()
 	}
